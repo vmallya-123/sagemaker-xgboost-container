@@ -1,6 +1,6 @@
-===========================
-SageMaker XGBoost Container
-===========================
+===================================
+SageMaker XGBoost MlFlow Container
+===================================
 
 SageMaker XGBoost MlFlow Container is an open source library for making the
 XGBoost framework run on Amazon SageMaker.
