@@ -2,7 +2,7 @@
 SageMaker XGBoost Container
 ===========================
 
-SageMaker XGBoost Container is an open source library for making the
+SageMaker XGBoost MlFlow Container is an open source library for making the
 XGBoost framework run on Amazon SageMaker.
 
 This repository also contains Dockerfiles which install this library and dependencies
@@ -10,8 +10,8 @@ for building SageMaker XGBoost Framework images.
 
 The SageMaker team uses this repository to build its official XGBoost Framework image. To use this image on SageMaker,
 see `Python SDK <https://github.com/aws/sagemaker-python-sdk>`__.
-For end users, this repository is typically of interest if you need implementation details for
-the official image, or if you want to use it to build your own customized XGBoost Framework image.
+For end users, this repository is a fork of the open source sagemaker xgboost container. It enables one to log metrics,parameters 
+and artifacts into mlflow
 
 Table of Contents
 -----------------
@@ -236,6 +236,82 @@ SageMaker <https://aws.amazon.com/sagemaker/>`__, then use:
                            --docker-base-name preprod-xgboost-container \
                            --instance-type ml.m4.xlarge \
                            --tag 1.0
+
+Using The Image For Training
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Once the image is built need to push it to ECR which can then be used by sagemaker training jobs. To do so, please do the below
+
+1. login to ECR using
+
+::
+
+    
+
+    aws ecr get-login-password --region <region> | docker login \
+     --username AWS \
+     --password-stdin <account_number>.dkr.ecr.<region>.amazonaws.com
+
+::
+
+    # Example
+     aws ecr get-login-password --region ap-southeast-1 | docker login \
+     --username AWS \
+     --password-stdin 123456789123.dkr.ecr.ap-southeast-1.amazonaws.com
+
+2. tag the image
+
+::
+
+    
+
+    docker tag <repository>:<tag> <account_number>.dkr.ecr.<region>.amazonaws.com/<repository>:<tag>
+
+::
+
+    # Example
+    docker tag preprod-xgboost-container:v0.0.1 123456789123.dkr.ecr.ap-southeast-1.amazonaws.com/xgboost-mlflow:latest
+
+3. push the image
+
+::
+
+    
+
+    docker push <account_number>.dkr.ecr.ap-southeast-1.amazonaws.com/<repository>:<tag>
+
+::
+
+    # Example
+    docker push 123456789123.dkr.ecr.ap-southeast-1.amazonaws.com/xgboost-mlflow:latest
+
+4. For training the image
+
+In case of a training job please choose ***Your own algorithm container in ECR*** and provide the URI you pushed to earlier
+
+::
+
+    
+
+    <account_number>.dkr.ecr.ap-southeast-1.amazonaws.com/<repository>:<tag>
+
+5. Provide ML-Flow parameters in the hyper parameters. Have to provide three parameters defined in mlflow_constants.py
+
+::
+
+    
+
+    TRACKING_URI <tracking_uri>
+    EXPERIMENT_NAME <experiment_name>  
+    MODEL_NAME <model_name>
+
+::
+
+    # Example
+    TRACKING_URI http://10.123.456.789
+    EXPERIMENT_NAME xgboost_experiment 
+    MODEL_NAME my_xgboost_model
+
+
 
 Contributing
 ------------
