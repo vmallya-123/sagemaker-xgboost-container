@@ -100,6 +100,38 @@ def print_checkpointed_evaluation(period=1, show_stdv=True, start_iteration=0):
             rabit.tracker_print('[%d]\t%s\n' % (i + start_iteration, msg))
     return callback
 
+def log_ml_flow_metrics(mlflowClient,period=1, start_iteration=0):
+    """Create a callback that logs mlflow metrics.
+
+    This function was modified from https://github.com/dmlc/xgboost/blob/master/python-package/xgboost/callback.py
+    The only difference between the following function and the original function in xgboost.callback
+    is the additional 'start_iteration' parameter.
+
+    We log mlflow metrics for each iteration
+    and on the first and the last iterations.
+
+    Parameters
+    ----------
+    period : int
+        The period to log the evaluation results
+
+    start_iteration: int, optioonal
+        Used for offsetting the iteratoin number that appears at the beginning of each evaluation result in the logs.
+
+    Returns
+    -------
+    callback : function
+        A callback that logs ml flow metrics every period iterations.
+    """
+    def callback(env):
+        """internal function"""
+        if env.rank != 0 or (not env.evaluation_result_list) or period is False or period == 0:
+            return
+        i = env.iteration
+        if i % period == 0 or i + 1 == env.begin_iteration or i + 1 == env.end_iteration:
+            for x in env.evaluation_result_list:
+                mlflowClient.log_metric('%d-%s' % (i + start_iteration, x[0]),x[1])
+    return callback
 
 def load_checkpoint(checkpoint_dir, max_try=5):
     """

@@ -20,3 +20,4 @@ scipy==1.5.3
 smdebug==1.0.7
 urllib3==1.25.9
 wheel==0.35.1
+mlflow==1.14.1

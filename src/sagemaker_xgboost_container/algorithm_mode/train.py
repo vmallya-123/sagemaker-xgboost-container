@@ -30,6 +30,7 @@ from sagemaker_xgboost_container.algorithm_mode import metrics as metrics_mod
 from sagemaker_xgboost_container.algorithm_mode import train_utils
 from sagemaker_xgboost_container.callback import add_debugging
 from sagemaker_xgboost_container.constants.xgb_constants import CUSTOMER_ERRORS
+from sagemaker_xgboost_container.constants import mlflow_constants
 
 MODEL_NAME = "xgboost-model"
 
@@ -98,7 +99,7 @@ def get_validated_dmatrices(train_path, validate_path, content_type, csv_weights
 
 
 def sagemaker_train(train_config, data_config, train_path, val_path, model_dir, sm_hosts, sm_current_host,
-                    checkpoint_config):
+                    checkpoint_config,mlflowClient,modelName):
     """Train XGBoost in a SageMaker training environment.
 
     Validate hyperparameters and data channel using SageMaker Algorithm Toolkit to fail fast if needed.
@@ -124,6 +125,9 @@ def sagemaker_train(train_config, data_config, train_path, val_path, model_dir, 
     channels = cv.initialize()
     validated_data_config = channels.validate(data_config)
 
+    logging.info("logging hyper parameters into mlflow ")
+    mlflowClient.log_params(validated_train_config)
+
     logging.debug("hyperparameters {}".format(validated_train_config))
     logging.debug("channels {}".format(validated_data_config))
 
@@ -146,7 +150,9 @@ def sagemaker_train(train_config, data_config, train_path, val_path, model_dir, 
         val_dmatrix=val_dmatrix,
         train_val_dmatrix=train_val_dmatrix,
         model_dir=model_dir,
-        checkpoint_dir=checkpoint_dir)
+        checkpoint_dir=checkpoint_dir,
+        mlflowClient=mlflowClient,
+        modelName=modelName)
 
     # Obtain information about training resources to determine whether to set up Rabit or not
     num_hosts = len(sm_hosts)
@@ -175,7 +181,8 @@ def sagemaker_train(train_config, data_config, train_path, val_path, model_dir, 
         raise exc.PlatformError("Number of hosts should be an int greater than or equal to 1")
 
 
-def train_job(train_cfg, train_dmatrix, val_dmatrix, train_val_dmatrix, model_dir, checkpoint_dir, is_master):
+def train_job(train_cfg, train_dmatrix, val_dmatrix, train_val_dmatrix, model_dir, checkpoint_dir, 
+is_master,mlflowClient,modelName):
     """Train and save XGBoost model using data on current node.
 
     If doing distributed training, XGBoost will use rabit to sync the trained model between each boosting iteration.
@@ -210,8 +217,10 @@ def train_job(train_cfg, train_dmatrix, val_dmatrix, train_val_dmatrix, model_di
         kfold = train_cfg.pop("_kfold", None)
 
         if kfold is None:
+            logging.info("kfold is none hence proceeding")
             xgb_model, iteration, callbacks, watchlist = get_callbacks_watchlist(
-                train_cfg, train_dmatrix, val_dmatrix, model_dir, checkpoint_dir, is_master)
+                train_cfg, train_dmatrix, val_dmatrix, model_dir, checkpoint_dir,
+                 is_master,mlflowClient)
             add_debugging(callbacks=callbacks, hyperparameters=train_cfg, train_dmatrix=train_dmatrix,
                           val_dmatrix=val_dmatrix)
 
@@ -241,7 +250,8 @@ def train_job(train_cfg, train_dmatrix, val_dmatrix, train_val_dmatrix, model_di
                 cv_val_dmatrix = train_val_dmatrix.slice(val_index)
 
                 xgb_model, iteration, callbacks, watchlist = get_callbacks_watchlist(
-                    train_cfg, cv_train_dmatrix, cv_val_dmatrix, model_dir, checkpoint_dir, is_master, len(bst))
+                    train_cfg, cv_train_dmatrix, cv_val_dmatrix, model_dir, checkpoint_dir,
+                     is_master,mlflowClient,len(bst))
                 add_debugging(callbacks=callbacks, hyperparameters=train_cfg, train_dmatrix=cv_train_dmatrix,
                               val_dmatrix=cv_val_dmatrix)
 
@@ -256,10 +266,14 @@ def train_job(train_cfg, train_dmatrix, val_dmatrix, train_val_dmatrix, model_di
 
                 if len(bst) % kfold == 0:
                     logging.info("The metrics of round {} cross validation".format(int(len(bst) / kfold)))
+                    logging.info("logging eval metrics into mlflow ")
+                    log_mlflow_metric(num_round,evals_results[-kfold:],mlflowClient)
                     print_cv_metric(num_round, evals_results[-kfold:])
 
             if num_cv_round > 1:
                 logging.info("The overall metrics of {}-round cross validation".format(num_cv_round))
+                logging.info("logging eval metrics into mlflow ")
+                log_mlflow_metric(num_round,evals_results,mlflowClient)
                 print_cv_metric(num_round, evals_results)
     except Exception as e:
         for customer_error_message in CUSTOMER_ERRORS:
@@ -274,19 +288,17 @@ def train_job(train_cfg, train_dmatrix, val_dmatrix, train_val_dmatrix, model_di
 
     if is_master:
         if type(bst) is not list:
-            model_location = os.path.join(model_dir, MODEL_NAME)
-            with open(model_location, 'wb') as f:
-                pkl.dump(bst, f, protocol=4)
-            logging.debug("Stored trained model at {}".format(model_location))
+            logging.info("logging xgboost model in mlflow")
+            mlflowClient.xgboost.log_model(bst,modelName)
         else:
             for fold in range(len(bst)):
-                model_location = os.path.join(model_dir, f"{MODEL_NAME}-{fold}")
-                with open(model_location, 'wb') as f:
-                    pkl.dump(bst[fold], f, protocol=4)
-                logging.debug("Stored trained model {} at {}".format(fold, model_location))
+                model_name = f"{modelName}-{fold}"
+                logging.info("logging xgboost model in mlflow")
+                mlflowClient.xgboost.log_model(bst[fold],model_name)
 
 
-def get_callbacks_watchlist(train_cfg, train_dmatrix, val_dmatrix, model_dir, checkpoint_dir, is_master, fold=None):
+def get_callbacks_watchlist(train_cfg, train_dmatrix, val_dmatrix, model_dir, checkpoint_dir, 
+is_master,mlFlowClient,fold=None):
     if checkpoint_dir and fold is not None:
         checkpoint_dir = os.path.join(checkpoint_dir, f"model-{fold}")
 
@@ -300,6 +312,7 @@ def get_callbacks_watchlist(train_cfg, train_dmatrix, val_dmatrix, model_dir, ch
 
     callbacks = []
     callbacks.append(checkpointing.print_checkpointed_evaluation(start_iteration=iteration))
+    callbacks.append(checkpointing.log_ml_flow_metrics(mlFlowClient,start_iteration=iteration))
     if checkpoint_dir:
         save_checkpoint = checkpointing.save_checkpoint(checkpoint_dir, start_iteration=iteration)
         callbacks.append(save_checkpoint)
@@ -326,3 +339,14 @@ def print_cv_metric(num_round, evals_results):
             metric_val = [evals_result[data_name][metric_name][-1] for evals_result in evals_results]
             cv_eval_report += '\t{0}-{1}:{2:.5f}'.format(data_name, metric_name, np.mean(metric_val))
     print(cv_eval_report)
+
+def log_mlflow_metric(num_round,evals_results,mlFlowClient):
+    logging.info("logging metrics in mlflow")
+    for metric_name in evals_results[0]['train']:
+        for data_name in ["train", "validation"]:
+            metric_val = [evals_result[data_name][metric_name][-1] for evals_result in evals_results]
+            cv_eval_report = f'CV-Round-{num_round}-{data_name}-{metric_name}'
+            mlFlowClient.log_metric(cv_eval_report,np.mean(metric_val))
+
+
+
